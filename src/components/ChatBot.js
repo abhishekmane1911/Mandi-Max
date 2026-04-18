@@ -38,12 +38,19 @@ const COMMODITY_MAP = {
   Rice:   ['rice','chawal','चावल','tandul','तांदूळ','arisi','biyyam','akki','બાફસુ'],
 };
 const CITY_COORDS = {
+  // English names
   ujjain:[23.1828,75.7772], indore:[22.7196,75.8577], bhopal:[23.2599,77.4126],
   lucknow:[26.8467,80.9462], jaipur:[26.9124,75.7873], pune:[18.5204,73.8567],
   mumbai:[19.0760,72.8777], delhi:[28.6139,77.2090], ahmedabad:[23.0225,72.5714],
   surat:[21.1702,72.8311], nagpur:[21.1458,79.0882], kanpur:[26.4499,80.3319],
   patna:[25.5941,85.1376], kolkata:[22.5726,88.3639],
   gorakhpur:[26.7606,83.3732], varanasi:[25.3176,82.9739],
+  // Hindi/Marathi Devanagari names (fallback for non-Sarvam mode)
+  'पुणे':[18.5204,73.8567], 'इंदौर':[22.7196,75.8577], 'दिल्ली':[28.6139,77.2090],
+  'मुंबई':[19.0760,72.8777], 'नागपुर':[21.1458,79.0882], 'लखनउ':[26.8467,80.9462],
+  'पटना':[25.5941,85.1376], 'जयपुर':[26.9124,75.7873], 'कानपुर':[26.4499,80.3319],
+  'सूरत':[21.1702,72.8311], 'वाराणसी':[25.3176,82.9739], 'कोलकाता':[22.5726,88.3639],
+  'अहमदाबाद':[23.0225,72.5714], 'भोपाल':[23.2599,77.4126], 'उज्जैन':[23.1828,75.7772],
 };
 function hav(lat1,lon1,lat2,lon2){
   const R=6371,dlat=(lat2-lat1)*Math.PI/180,dlon=(lon2-lon1)*Math.PI/180;
@@ -105,7 +112,7 @@ function localProcess(message, session) {
 
 // ── Speech-to-Text via Sarvam STT API ────────────────────────────────────────
 async function speechToText(audioBlob, language) {
-  if(!API_BASE) return null;
+  // Always try — Netlify proxy handles routing to Databricks
   const form = new FormData();
   form.append('audio', audioBlob, 'recording.webm');
   form.append('language', language);
@@ -135,22 +142,21 @@ async function playTTS(text, language) {
   } catch {}
 }
 async function sendMessage(message, session, language) {
-  // Try backend /api/chat (Sarvam LLM + live Databricks data)
-  if(API_BASE) {
-    try {
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ message, language, context: session, user_id:'dashboard_user' }),
-        signal: AbortSignal.timeout(12000),
-      });
-      if(res.ok) {
-        const d = await res.json();
-        return { reply: d.reply, context: d.context || {}, sarvam: d.sarvam_used };
-      }
-    } catch(e) { console.warn('[ChatBot] Backend unavailable, using local engine:', e.message); }
-  }
-  // Fallback: local JS engine
+  // Always try backend via Netlify proxy /api/chat
+  // API_BASE is '' (empty) so URL becomes '/api/chat' → Netlify proxies to Databricks
+  try {
+    const res = await fetch(`${API_BASE}/api/chat`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ message, language, context: session, user_id:'dashboard_user' }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if(res.ok) {
+      const d = await res.json();
+      if(d.reply) return { reply: d.reply, context: d.context || {}, sarvam: d.sarvam_used };
+    }
+  } catch(e) { console.warn('[ChatBot] Backend unavailable, using local engine:', e.message); }
+  // Fallback: local JS engine (offline mode)
   return { ...localProcess(message, session), sarvam: false };
 }
 
