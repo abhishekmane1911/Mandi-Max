@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 
+// Use relative /api path → Netlify proxies to Databricks (no CORS issues)
+// If REACT_APP_API_BASE_URL is set, use it (for local dev pointing to localhost:8000)
 const API_BASE = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/$/, '');
 
 // ── Indian language options ────────────────────────────────────────────────────

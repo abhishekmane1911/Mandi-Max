@@ -1,0 +1,19 @@
+[build]
+  command = "npm run build"
+  publish = "build"
+
+# ── Proxy all /api/* to Databricks App (bypasses CORS entirely) ───────────────
+# Browser calls https://mandimax.netlify.app/api/chat
+# Netlify forwards it to https://mandimax-bot-7474653808917244.aws.databricksapps.com/api/chat
+# No cross-origin request ever leaves the browser → CORS solved!
+[[redirects]]
+  from   = "/api/*"
+  to     = "https://mandimax-bot-7474653808917244.aws.databricksapps.com/api/:splat"
+  status = 200
+  force  = true
+
+# ── React Router — serve index.html for all non-API routes ───────────────────
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200

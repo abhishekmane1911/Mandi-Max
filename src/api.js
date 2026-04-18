@@ -11,13 +11,13 @@
  */
 
 // ── Base URL ───────────────────────────────────────────────────────────────────
+// Empty string = relative URLs → Netlify proxy forwards /api/* to Databricks App
 const API_BASE = (process.env.REACT_APP_API_BASE_URL || '').replace(/\/$/, '');
-const LIVE     = Boolean(API_BASE);
+const LIVE     = true;  // Always try live — Netlify proxy is always available
 
 // ── Generic fetch with timeout + fallback ─────────────────────────────────────
 async function liveFetch(path, params = {}) {
-  if (!LIVE) return null;   // no backend configured → skip straight to fallback
-  const url    = new URL(`${API_BASE}${path}`);
+  const url    = new URL(`${API_BASE}${path}`, window.location.origin);
   Object.entries(params).forEach(([k, v]) => v !== undefined && url.searchParams.set(k, v));
   const ctrl   = new AbortController();
   const timer  = setTimeout(() => ctrl.abort(), 10000); // 10s timeout
