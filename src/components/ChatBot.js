@@ -26,6 +26,15 @@ const MOCK_ARB = [
   { tgt_market:'NAGPUR',    tgt_district:'NAGPUR',    tgt_state:'MAHARASHTRA',   tgt_price:7500,  tgt_lat:21.1458, tgt_lon:79.0882 },
   { tgt_market:'PUNE',      tgt_district:'PUNE',      tgt_state:'MAHARASHTRA',   tgt_price:7200,  tgt_lat:18.5204, tgt_lon:73.8567 },
 ];
+
+// Expanded multilingual commodity keywords (Hindi, Marathi, Gujarati, Tamil, Telugu, Kannada)
+const COMMODITY_MAP = {
+  Tomato: ['tomato','tamatar','टमाटर','tomat','tometo','டமாடோ','టమాటా','ಟಮಾಟೇ'],
+  Onion:  ['onion','pyaz','प्याज','kanda','कांदा','कांडा','dungri','डुंगरी','vengayam','ulligadda','eerulli','ಉಳ್ಳಿ'],
+  Potato: ['potato','aloo','आलू','batata','बटाटा','urulaikilangu','bangaladumpa','ಆలూగడ్డ'],
+  Wheat:  ['wheat','gehun','गेहूं','gahu','गहू','godhi','ਗਹું','ਕਣਕ'],
+  Rice:   ['rice','chawal','चावल','tandul','तांदूळ','arisi','biyyam','akki','બાફસુ'],
+};
 const CITY_COORDS = {
   ujjain:[23.1828,75.7772], indore:[22.7196,75.8577], bhopal:[23.2599,77.4126],
   lucknow:[26.8467,80.9462], jaipur:[26.9124,75.7873], pune:[18.5204,73.8567],
@@ -42,19 +51,8 @@ function hav(lat1,lon1,lat2,lon2){
 
 function localProcess(message, session) {
   const t = message.toLowerCase().trim();
-  const COMMODITY_MAP = {
-    Tomato:['tomato','tamatar','टमाटर'], Onion:['onion','pyaz','प्याज'],
-    Potato:['potato','aloo','आलू'],      Wheat:['wheat','gehun','गेहूं'],
-    Rice:['rice','chawal','चावल'],
-  };
 
-  if(['hi','hello','help','start'].includes(t) || !session.step) {
-    return { reply: '👋 *Welcome to MandiMax!*\n\nI help you find the best mandi to sell your crop.\n\nTry: *sell tomato*, *crops UP*, or type your crop name!', context:{step:'ask_commodity'} };
-  }
-  if(t.includes('crop') || t.includes('advisory')) {
-    return { reply: '🌱 *Best crops (by stability):*\n\n🥇 *Rice* — ₹3,245/q (Stability 99.6/100)\n🥈 *Potato* — ₹1,555/q (Stability 96.9/100)\n🥉 *Onion* — ₹2,129/q (Stability 95.4/100)\n\n_Based on 30-day APMC data._', context:{step:'done'} };
-  }
-
+  // Detect commodity using expanded multilingual map
   let commodity = null;
   for(const [crop, keys] of Object.entries(COMMODITY_MAP)){
     if(keys.some(k=>t.includes(k))){ commodity=crop; break; }
@@ -62,9 +60,19 @@ function localProcess(message, session) {
   const qtyM = t.match(/(\d+(?:\.\d+)?)\s*(?:quintal|q\b)/i);
   const qty = qtyM ? parseFloat(qtyM[1]) : (session.quantity||10);
 
-  if(commodity && !session.step) {
+  // ── Commodity is HIGHEST PRIORITY — always starts fresh sell flow ─────────
+  const FRESH = [undefined, null, '', 'ask_commodity', 'done'];
+  if(commodity && FRESH.includes(session.step)) {
     return { reply:`Got it! 🌾 *${commodity}*, ${qty} quintal(s).\n\n📍 Which city are you in?\n\nType: *Ujjain, Indore, Lucknow, Patna, Delhi, Pune, Nagpur*`, context:{step:'ask_city', commodity, quantity:qty} };
   }
+
+  if(['hi','hello','help','start','नमस्ते','नमस्कार'].includes(t) || (!session.step && !commodity && !t.includes('crop'))) {
+    return { reply: '👋 *Welcome to MandiMax!*\n\nI help you find the *best mandi* to sell your crop.\n\nType: *sell tomato*, *कांदा विकायचा आहे*, *crops UP*, or *help*', context:{step:'ask_commodity'} };
+  }
+  if(t.includes('crop') || t.includes('advisory') || t.includes('पिक')) {
+    return { reply: '🌱 *Best crops (by stability):*\n\n🥇 *Rice* — ₹3,245/q (Stability 99.6/100)\n🥈 *Potato* — ₹1,555/q (Stability 96.9/100)\n🥉 *Onion* — ₹2,129/q (Stability 95.4/100)\n\n_Based on 30-day APMC data._', context:{step:'done'} };
+  }
+
   if(session.step === 'ask_city') {
     let found=null;
     for(const [city,coords] of Object.entries(CITY_COORDS)) { if(t.includes(city)){found={city,coords};break;} }
@@ -93,7 +101,37 @@ function localProcess(message, session) {
   return { reply:`🤔 I didn't understand that.\n\nTry: *sell tomato*, *sell 20 quintal onion*, *crops UP*, or *help*`, context:{} };
 }
 
-// ── Main bot send handler ─────────────────────────────────────────────────────
+// ── Speech-to-Text via Sarvam STT API ────────────────────────────────────────
+async function speechToText(audioBlob, language) {
+  if(!API_BASE) return null;
+  const form = new FormData();
+  form.append('audio', audioBlob, 'recording.webm');
+  form.append('language', language);
+  try {
+    const res = await fetch(`${API_BASE}/api/stt`, { method:'POST', body:form, signal:AbortSignal.timeout(15000) });
+    if(!res.ok) return null;
+    const d = await res.json();
+    return d.transcript || null;
+  } catch { return null; }
+}
+
+// ── Text-to-Speech via Sarvam TTS API ────────────────────────────────────────
+async function playTTS(text, language) {
+  if(!API_BASE || language==='en-IN') return; // skip for English (browser TTS is fine)
+  try {
+    const res = await fetch(`${API_BASE}/api/tts`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text:text.replace(/\*/g,'').slice(0,400), language}),
+      signal: AbortSignal.timeout(12000),
+    });
+    if(!res.ok) return;
+    const d = await res.json();
+    if(d.audio_base64) {
+      const audio = new Audio(`data:audio/wav;base64,${d.audio_base64}`);
+      audio.play().catch(()=>{});
+    }
+  } catch {}
+}
 async function sendMessage(message, session, language) {
   // Try backend /api/chat (Sarvam LLM + live Databricks data)
   if(API_BASE) {
@@ -124,8 +162,52 @@ export default function ChatBot() {
   const [session,  setSession]  = useState({});
   const [language, setLanguage] = useState('en-IN');
   const [showLang, setShowLang] = useState(false);
+  const [recording, setRecording] = useState(false);  // mic state
+  const mediaRef = useRef(null);
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
+
+  // ── Microphone handler (Sarvam STT) ────────────────────────────────────────
+  const toggleMic = async () => {
+    if(recording) {
+      mediaRef.current?.stop();
+      setRecording(false);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+      recorder.ondataavailable = e => chunks.push(e.data);
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        setTyping(true);
+        const transcript = await speechToText(blob, language);
+        setTyping(false);
+        if(transcript) {
+          setInput(transcript);
+          // Auto-send after short delay
+          setTimeout(() => {
+            setMessages(prev=>[...prev,{from:'user',text:transcript,ts:new Date()}]);
+            setInput('');
+            setTyping(true);
+            sendMessage(transcript, session, language).then(({reply,context,sarvam}) => {
+              setSession(context||{});
+              setTyping(false);
+              setMessages(prev=>[...prev,{from:'bot',text:reply,ts:new Date(),sarvam}]);
+              if(language!=='en-IN') playTTS(reply, language);
+            });
+          }, 100);
+        }
+      };
+      mediaRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch(e) {
+      alert('Microphone access denied. Please allow mic in browser settings.');
+    }
+  };
 
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:'smooth'}); },[messages,typing]);
   useEffect(()=>{ if(open) inputRef.current?.focus(); },[open]);
@@ -140,6 +222,8 @@ export default function ChatBot() {
       const {reply, context, sarvam} = await sendMessage(text, session, language);
       setSession(context||{});
       setMessages(prev=>[...prev,{from:'bot',text:reply,ts:new Date(),sarvam}]);
+      // Auto-play TTS for non-English languages
+      if(language!=='en-IN') playTTS(reply, language);
     } finally { setTyping(false); }
   };
 
@@ -247,22 +331,32 @@ export default function ChatBot() {
             ))}
           </div>
 
-          {/* Input */}
-          <div style={{padding:'7px 10px',background:'#1f2c34',display:'flex',alignItems:'center',gap:7,borderTop:'1px solid rgba(255,255,255,0.06)'}}>
+          {/* Input with mic button */}
+          <div style={{padding:'7px 10px',background:'#1f2c34',display:'flex',alignItems:'center',gap:6,borderTop:'1px solid rgba(255,255,255,0.06)'}}>
+            {/* Mic button */}
+            <button onClick={toggleMic} title={recording?'Stop recording':'Speak in your language'}
+              style={{width:36,height:36,borderRadius:'50%',border:'none',flexShrink:0,
+                background:recording?'#ff4444':'#2a3942',color:'white',cursor:'pointer',
+                fontSize:16,display:'flex',alignItems:'center',justifyContent:'center',
+                animation:recording?'pulse 1s infinite':'none',transition:'background 0.2s'}}>
+              {recording?'⏹':'🎤'}
+            </button>
             <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={handleKey}
-              placeholder={`Type in ${currentLang?.name||'English'}…`} id="chatbot-input"
+              placeholder={recording?`Recording ${currentLang?.name}…`:`Type in ${currentLang?.name||'English'}…`}
+              id="chatbot-input" disabled={recording}
               style={{flex:1,padding:'9px 13px',borderRadius:22,border:'none',background:'#2a3942',
-                color:'#e9edef',fontSize:13,outline:'none'}}/>
+                color:'#e9edef',fontSize:13,outline:'none',opacity:recording?0.6:1}}/>
             <button id="chatbot-send" onClick={send}
-              style={{width:38,height:38,borderRadius:'50%',border:'none',
+              style={{width:36,height:36,borderRadius:'50%',border:'none',flexShrink:0,
                 background:input.trim()?'linear-gradient(135deg,#25d366,#128c7e)':'#2a3942',
-                color:'white',cursor:'pointer',fontSize:15,transition:'all 0.2s'}}>➤</button>
+                color:'white',cursor:'pointer',fontSize:14,transition:'all 0.2s'}}>➤</button>
           </div>
         </div>
       )}
 
       <style>{`
         @keyframes bounce { 0%,60%,100%{transform:translateY(0);opacity:0.4} 30%{transform:translateY(-4px);opacity:1} }
+        @keyframes pulse  { 0%,100%{box-shadow:0 0 0 0 rgba(255,68,68,0.4)} 50%{box-shadow:0 0 0 8px rgba(255,68,68,0)} }
       `}</style>
     </>
   );
